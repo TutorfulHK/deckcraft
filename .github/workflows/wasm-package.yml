@@ -49,7 +49,7 @@ jobs:
           if [ "$version" = "$GITHUB_REF_NAME" ]; then
             version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)-dev.${GITHUB_RUN_NUMBER}"
           fi
-          VERSION="$version" packaging/wasm/build.sh "$RUNNER_TEMP/pkg" | tee "$RUNNER_TEMP/size.txt"
+          VERSION="$version" FEATURES=none packaging/wasm/build.sh "$RUNNER_TEMP/pkg" | tee "$RUNNER_TEMP/size.txt"
           tail -n 1 "$RUNNER_TEMP/size.txt" >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
