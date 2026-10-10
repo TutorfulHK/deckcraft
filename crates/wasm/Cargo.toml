@@ -1,0 +1,24 @@
+[package]
+name = "deckcraft-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft as a headless WebAssembly library: open and save PPTX, flatten to and build from the flat deck, render slide PNGs, export PDF"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["media"]
+# Audio/video probing and poster frames (the codecs); off for a smaller web build.
+media = ["deckcraft-engine/media"]
+
+[dependencies]
+deckcraft-engine = { path = "../engine", default-features = false }
+deckcraft-fonts = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "0.2"
