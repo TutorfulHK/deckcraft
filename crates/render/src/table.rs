@@ -106,7 +106,7 @@ fn edges(sizes: &[f64]) -> Vec<f64> {
 }
 
 /// A cell's text as drawn: its margins, anchor and direction, plus the table style's text colour and bold.
-pub(crate) fn cell_body(rctx: &Ctx, t: &Table, r: usize, c: usize, cell: &Cell) -> TextBody {
+pub fn cell_body(rctx: &Ctx, t: &Table, r: usize, c: usize, cell: &Cell) -> TextBody {
     let lk = look(rctx, t, r, c);
     let mut body = cell.text.clone();
     let [ml, mr, mt, mb] = cell.margins.unwrap_or([7.2, 7.2, 3.6, 3.6]);

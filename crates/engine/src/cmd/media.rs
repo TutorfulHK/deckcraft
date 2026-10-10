@@ -25,6 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             info
         ),
         cmd!(
+            query "media.bytes",
+            "Media Bytes",
+            [],
+            None,
+            "{id: flat media id} → {data: base64, contentType, name, bytes}",
+            always,
+            media_bytes
+        ),
+        cmd!(
             "media.posterFrame",
             "Poster Frame",
             ["Video Format", "Adjust"],
@@ -146,6 +155,16 @@ fn poster_frame(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"id": id, "ms": ms}))
+}
+
+fn media_bytes(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = match p.get("id") {
+        Some(Value::String(v)) => v.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return Err(bad("media.bytes", "missing `id`")),
+    };
+    let b = crate::flat::media_bytes(s, &id).ok_or_else(|| bad("media.bytes", format!("no media `{id}`")))?;
+    Ok(json!({"data": base64_encode(&b.data), "contentType": b.content_type, "name": b.name, "bytes": b.data.len()}))
 }
 
 #[cfg(test)]

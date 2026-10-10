@@ -9,6 +9,7 @@
 
 pub mod cmd;
 pub mod connect;
+pub mod flat;
 pub mod guard;
 pub mod keys;
 pub mod links;
@@ -309,6 +310,10 @@ pub struct Session {
     pub recovery_dir: Option<std::path::PathBuf>,
     /// Media playback state, written by the UI host every frame (empty without a host).
     pub media_status: std::collections::HashMap<ShapeId, MediaStatus>,
+    /// PNGs made by the last `file.flatten` (raster elements, chart pictures), by flat media id.
+    pub flat_media: std::collections::HashMap<String, flat::FlatBlob>,
+    /// Media bytes a host staged for the next `file.fromFlat`, by flat media id.
+    pub staged_media: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl Default for Session {
@@ -334,6 +339,8 @@ impl Session {
             depth: 0,
             recovery_dir: None,
             media_status: Default::default(),
+            flat_media: Default::default(),
+            staged_media: Default::default(),
         }
     }
     /// A session with one new presentation open.
