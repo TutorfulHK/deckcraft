@@ -25,6 +25,7 @@ use serde_json::Value;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use deckcraft_geom as geom;
+#[cfg(feature = "media")]
 pub use deckcraft_media as media;
 pub use deckcraft_model as model;
 pub use deckcraft_render as render;

@@ -8,6 +8,12 @@ description = "DeckCraft engine: sessions, undo history, selection, the command 
 [lints]
 workspace = true
 
+[features]
+default = ["media"]
+# Probing audio/video and decoding poster frames (the codecs). Off, media is still embedded,
+# saved and played by the host, just not inspected (smaller web builds).
+media = ["dep:deckcraft-media"]
+
 [dependencies]
 deckcraft-geom = { workspace = true }
 deckcraft-color = { workspace = true }
@@ -18,7 +24,7 @@ deckcraft-render = { workspace = true }
 deckcraft-pdf = { workspace = true }
 deckcraft-format = { workspace = true }
 deckcraft-pptx = { workspace = true }
-deckcraft-media = { workspace = true }
+deckcraft-media = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 i_overlay = { workspace = true }

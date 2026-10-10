@@ -92,21 +92,54 @@ fn seek(s: &mut Session, p: &Value) -> Result<Value> {
     request(s, p, "media.seek", "seek", Some(ms))
 }
 
-pub(crate) fn probe_json(info: &deckcraft_media::MediaInfo) -> Value {
-    json!({
-        "container": info.container,
-        "durationMs": info.duration_ms,
-        "playable": info.playable(),
-        "audio": info.audio.as_ref().map(|a| json!({"codec": a.codec, "sampleRate": a.sample_rate, "channels": a.channels, "decodable": a.decodable})),
-        "video": info.video.as_ref().map(|v| json!({"codec": v.codec, "width": v.width, "height": v.height, "fps": (v.fps * 1000.0).round() / 1000.0, "frames": v.frames, "decodable": v.decodable})),
+/// What a probe of media bytes found (the subset commands use), or why nothing could be read.
+pub(crate) struct Probe {
+    pub has_video: bool,
+    pub has_audio: bool,
+    pub duration_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub playable: bool,
+    pub decodable_video: bool,
+    pub codecs: Vec<String>,
+    pub json: Value,
+}
+
+/// Probe media bytes (container, codecs, duration, picture size).
+#[cfg(feature = "media")]
+pub(crate) fn probe(bytes: &std::sync::Arc<Vec<u8>>) -> std::result::Result<Probe, String> {
+    let info = deckcraft_media::probe(bytes).map_err(|e| e.to_string())?;
+    let (width, height) = info.video.as_ref().map(|v| (v.width, v.height)).unwrap_or((0, 0));
+    Ok(Probe {
+        has_video: info.video.is_some(),
+        has_audio: info.audio.is_some(),
+        duration_ms: info.duration_ms,
+        width,
+        height,
+        playable: info.playable(),
+        decodable_video: info.video.as_ref().is_some_and(|v| v.decodable),
+        codecs: info.audio.iter().map(|a| a.codec.clone()).chain(info.video.iter().map(|v| v.codec.clone())).collect(),
+        json: json!({
+            "container": info.container,
+            "durationMs": info.duration_ms,
+            "playable": info.playable(),
+            "audio": info.audio.as_ref().map(|a| json!({"codec": a.codec, "sampleRate": a.sample_rate, "channels": a.channels, "decodable": a.decodable})),
+            "video": info.video.as_ref().map(|v| json!({"codec": v.codec, "width": v.width, "height": v.height, "fps": (v.fps * 1000.0).round() / 1000.0, "frames": v.frames, "decodable": v.decodable})),
+        }),
     })
+}
+
+/// Built without the `media` feature: media is embedded and saved, but not probed or decoded.
+#[cfg(not(feature = "media"))]
+pub(crate) fn probe(_bytes: &std::sync::Arc<Vec<u8>>) -> std::result::Result<Probe, String> {
+    Err("media decoding is not built in".into())
 }
 
 fn info(s: &mut Session, p: &Value) -> Result<Value> {
     let (id, m) = target(s, p, "media.info")?;
     let st = s.doc()?;
     let item = st.doc.media(m.media).ok_or_else(|| EngineError::Other("the media data is missing".into()))?;
-    let probe = deckcraft_media::probe(&item.data).map(|i| probe_json(&i)).unwrap_or_else(|e| json!({"error": e.to_string()}));
+    let probe = probe(&item.data).map(|i| i.json).unwrap_or_else(|e| json!({"error": e}));
     Ok(json!({
         "id": id,
         "name": item.name,
@@ -127,8 +160,14 @@ fn info(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+#[cfg(not(feature = "media"))]
+pub(crate) fn poster_png(_bytes: &std::sync::Arc<Vec<u8>>, _ms: u64) -> Option<Vec<u8>> {
+    None
+}
+
 /// A poster frame PNG for video bytes at `ms`.
-pub(crate) fn poster_png(bytes: &deckcraft_media::Bytes, ms: u64) -> Option<Vec<u8>> {
+#[cfg(feature = "media")]
+pub(crate) fn poster_png(bytes: &std::sync::Arc<Vec<u8>>, ms: u64) -> Option<Vec<u8>> {
     match deckcraft_media::poster_png(bytes, ms as f64 / 1000.0) {
         Ok(png) => Some(png),
         Err(e) => {
@@ -200,8 +239,14 @@ mod tests {
         let mut s = Session::with_new();
         let _ = s.execute("slide.new", &json!({"layout": "blank"}));
         let r = s.execute("insert.audio", &json!({"name": "tone.wav", "data": base64_encode(&wav())})).expect("insert");
-        assert_eq!(r["durationMs"], 500);
-        assert_eq!(r["playable"], true);
+        if cfg!(feature = "media") {
+            assert_eq!(r["durationMs"], 500);
+            assert_eq!(r["playable"], true);
+        } else {
+            // Built without the codecs: embedded all the same, reported as not playable here.
+            assert_eq!(r["playable"], false);
+            assert!(r["warning"].as_str().is_some_and(|w| w.contains("not built in")), "{r}");
+        }
         let id = r["id"].as_u64().expect("id");
         s.ui_requests.clear();
         s.execute("media.play", &json!({"from": 100})).expect("play");
@@ -211,8 +256,12 @@ mod tests {
         // The host reports state; media.info returns it with the probe.
         s.media_status.insert(ShapeId(id as u32), MediaStatus { state: "playing".into(), position_ms: 250, duration_ms: 500, error: None });
         let i = s.execute("media.info", &json!({})).expect("info");
-        assert_eq!(i["probe"]["audio"]["sampleRate"], 8000);
-        assert_eq!(i["probe"]["container"], "wav");
+        if cfg!(feature = "media") {
+            assert_eq!(i["probe"]["audio"]["sampleRate"], 8000);
+            assert_eq!(i["probe"]["container"], "wav");
+        } else {
+            assert!(i["probe"]["error"].is_string(), "{i}");
+        }
         assert_eq!(i["status"]["positionMs"], 250);
         assert_eq!(i["status"]["state"], "playing");
         assert!(s.execute("media.posterFrame", &json!({})).is_err(), "audio has no poster frame");
