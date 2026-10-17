@@ -7,13 +7,13 @@
 //!   `.odttf`): the first 32 bytes are XORed with a 16-byte key taken from the GUID in the part
 //!   name, read right to left;
 //! - Embedded OpenType (EOT, W3C submission 2008) — the form PowerPoint itself writes as
-//!   `.fntdata`. Uncompressed EOT (optionally XOR-0x50 encrypted) is unwrapped; MTX-compressed
-//!   EOT is not decoded and yields `None`.
+//!   `.fntdata`. EOT (optionally XOR-0x50 encrypted) is unwrapped, and MicroType Express
+//!   compressed EOT is decompressed (`crate::mtx`).
 
 /// Why an embedded font part could not be turned into a plain font.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontSkip {
-    /// EOT with MicroType Express compression (not decoded).
+    /// EOT with MicroType Express compression that failed to decode.
     MtxCompressed,
     /// Not a recognisable font.
     Unknown,
@@ -67,14 +67,14 @@ fn eot(b: &[u8]) -> Result<Option<Vec<u8>>, FontSkip> {
     if !matches!(version, 0x0001_0000 | 0x0002_0001 | 0x0002_0002) || usize::try_from(size).ok() != Some(b.len()) {
         return Ok(None);
     }
-    if flags & 0x4 != 0 {
-        return Err(FontSkip::MtxCompressed);
-    }
     let data_size = usize::try_from(data_size).map_err(|_| FontSkip::Unknown)?;
     let start = b.len().checked_sub(data_size).ok_or(FontSkip::Unknown)?;
     let mut font = b.get(start..).ok_or(FontSkip::Unknown)?.to_vec();
     if flags & 0x1000_0000 != 0 {
         font.iter_mut().for_each(|x| *x ^= 0x50);
+    }
+    if flags & 0x4 != 0 {
+        return crate::mtx::decode(&font).map(Some).map_err(|_| FontSkip::MtxCompressed);
     }
     Ok(Some(font))
 }

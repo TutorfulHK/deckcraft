@@ -10,6 +10,7 @@
 mod custgeom;
 pub mod fonts;
 mod maps;
+pub mod mtx;
 mod opc;
 mod png;
 pub(crate) mod read;

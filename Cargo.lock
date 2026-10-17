@@ -1081,6 +1081,7 @@ dependencies = [
  "log",
  "quick-xml 0.38.4",
  "serde_json",
+ "skrifa 0.47.0",
  "thiserror 2.0.21",
  "zip",
 ]
