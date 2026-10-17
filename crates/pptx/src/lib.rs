@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod custgeom;
+pub mod fonts;
 mod maps;
 mod opc;
 mod png;

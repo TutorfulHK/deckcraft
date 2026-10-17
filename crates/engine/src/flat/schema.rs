@@ -22,6 +22,28 @@ pub struct FlatDeck {
     pub slides: Vec<FlatSlide>,
     #[serde(default)]
     pub media: Vec<FlatMedia>,
+    /// Fonts embedded in the deck, as plain TrueType/OpenType media (bytes via `mediaBytes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<FlatFont>,
+}
+
+/// One embedded font face.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlatFont {
+    pub typeface: String,
+    #[serde(default)]
+    pub style: FlatFontStyle,
+    /// Media id (in `media`) holding the font file.
+    pub media_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlatFontStyle {
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -235,6 +257,9 @@ pub struct FlatText {
     /// Shrink-on-overflow scale the text is drawn at (only when below 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_scale: Option<f64>,
+    /// Shrink-on-overflow line-spacing reduction (0–1), as stored in the file (`lnSpcReduction`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_reduction: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns: Option<u32>,
     pub paragraphs: Vec<FlatParagraph>,
@@ -248,6 +273,7 @@ impl Default for FlatText {
             autofit: "none".into(),
             wrap: true,
             font_scale: None,
+            line_reduction: None,
             columns: None,
             paragraphs: vec![],
         }

@@ -32,7 +32,7 @@ engine.fromFlat(JSON.stringify(deck));          // media ids from the last flatt
 const pptx = engine.saveBytes("pptx");          // Uint8Array; also "pdf" and "deckcraft"
 
 engine.execute("slide.new", JSON.stringify({ layout: "blank" })); // any engine command (JSON in/out)
-version();                                      // "0.4.0"
+version();                                      // "0.4.1"
 ```
 
 | Call | Does |

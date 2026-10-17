@@ -163,7 +163,16 @@ pub fn flatten(pres: &Presentation) -> (FlatDeck, HashMap<String, FlatBlob>) {
     for (index, slide) in pres.slides.iter().enumerate() {
         slides.push(flat_slide(pres, index, slide, &mut out));
     }
-    let deck = FlatDeck { version: FLAT_VERSION, size: FlatSize { w: pres.slide_size.width, h: pres.slide_size.height }, slides, media: out.media };
+    let fonts = pres
+        .embedded_fonts
+        .iter()
+        .filter_map(|f| {
+            let media_id = out.doc_media(pres, f.media)?;
+            Some(FlatFont { typeface: f.typeface.clone(), style: FlatFontStyle { bold: f.bold, italic: f.italic }, media_id })
+        })
+        .collect();
+    let deck =
+        FlatDeck { version: FLAT_VERSION, size: FlatSize { w: pres.slide_size.width, h: pres.slide_size.height }, slides, media: out.media, fonts };
     (deck, out.blobs)
 }
 
@@ -507,11 +516,21 @@ fn text_in(ctx: &Ctx, fields: &Fields, s: &Shape, body: &TextBody, tr: Rect, w: 
         Some(AutoFit::Shape) => "resize",
         _ => "none",
     };
-    let font_scale = if autofit == "shrink" && !body.is_empty() {
+    // PowerPoint stores the scale it settled on (`<a:normAutofit fontScale lnSpcReduction>`);
+    // use it as-is, and only search for one when the file stored none.
+    let stored = match bp.autofit {
+        Some(AutoFit::Shrink { font_scale, line_reduction }) if font_scale.is_finite() && font_scale < 0.999 => {
+            Some((font_scale.clamp(0.01, 1.0), line_reduction))
+        }
+        _ => None,
+    };
+    let (font_scale, line_reduction) = if let Some((fs, lr)) = stored {
+        (Some(fs), (lr.is_finite() && lr > 0.0).then(|| lr.clamp(0.0, 1.0)))
+    } else if autofit == "shrink" && !body.is_empty() {
         let l = deckcraft_text::layout(ctx, s, body, &deckcraft_text::Opts { rect: tr, fields, prompt_color: None, no_shrink: false });
-        (l.font_scale.is_finite() && l.font_scale < 0.999).then_some(l.font_scale)
+        ((l.font_scale.is_finite() && l.font_scale < 0.999).then_some(l.font_scale), None)
     } else {
-        None
+        (None, None)
     };
     FlatText {
         v_align: v_align(bp.anchor).into(),
@@ -519,6 +538,7 @@ fn text_in(ctx: &Ctx, fields: &Fields, s: &Shape, body: &TextBody, tr: Rect, w: 
         autofit: autofit.into(),
         wrap: bp.wrap.unwrap_or(true),
         font_scale,
+        line_reduction,
         columns: bp.columns.filter(|c| *c > 1),
         paragraphs: body.paragraphs.iter().map(|p| flat_para(ctx, fields, s, p)).collect(),
     }

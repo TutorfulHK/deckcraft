@@ -374,7 +374,8 @@ fn text_body(t: &FlatText, rect: Option<(deckcraft_geom::Rect, f64, f64)>) -> Te
         autofit: Some(match t.autofit.as_str() {
             "shrink" => {
                 let fs = t.font_scale.filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.1, 1.0);
-                AutoFit::Shrink { font_scale: fs, line_reduction: ((1.0 - fs) * 0.8).min(0.2) }
+                let lr = t.line_reduction.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0)).unwrap_or(((1.0 - fs) * 0.8).min(0.2));
+                AutoFit::Shrink { font_scale: fs, line_reduction: lr }
             }
             "resize" => AutoFit::Shape,
             _ => AutoFit::None,

@@ -317,3 +317,163 @@ fn sniffs_common_types() {
     assert_eq!(sniff_content_type(b"\0\0\0\x18ftypmp42"), "video/mp4");
     assert_eq!(sniff_content_type(b""), "application/octet-stream");
 }
+
+/// Every flat text body (an object with `paragraphs`) in a flattened deck, as JSON.
+fn text_bodies(d: &FlatDeck) -> Vec<Value> {
+    fn walk(v: &Value, out: &mut Vec<Value>) {
+        match v {
+            Value::Object(m) => {
+                if m.contains_key("paragraphs") {
+                    out.push(v.clone());
+                }
+                m.values().for_each(|x| walk(x, out));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    walk(&serde_json::to_value(d).unwrap(), &mut out);
+    out
+}
+
+fn body_text(t: &Value) -> String {
+    t["paragraphs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|p| p["runs"].as_array().into_iter().flatten())
+        .filter_map(|r| r["text"].as_str())
+        .collect()
+}
+
+/// A synthetic .pptx (built in code, written by our writer, read back by our reader) with a
+/// Georgia/Calibri theme, a title placeholder and a text box shrunk to 62.5 % / 20 %.
+fn synthetic_pptx_session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"blank": true})).unwrap();
+    s.execute("design.fonts", &json!({"major": "Georgia", "minor": "Calibri"})).unwrap();
+    s.execute("slide.new", &json!({"layout": "titleOnly", "title": "Heading"})).unwrap();
+    s.execute("shape.insert", &json!({"preset": "rect", "rect": [36, 120, 300, 80], "text": "Body text"})).unwrap();
+    {
+        let doc = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc);
+        let slide = std::sync::Arc::make_mut(doc.slides.last_mut().unwrap());
+        for sh in &mut slide.shapes {
+            if let Some(t) = sh.text.as_mut().filter(|t| t.paragraphs.iter().any(|p| p.runs.iter().any(|r| r.text == "Body text"))) {
+                t.body.autofit = Some(deckcraft_model::text::AutoFit::Shrink { font_scale: 0.625, line_reduction: 0.2 });
+                // No explicit typeface anywhere: it must come from the theme.
+                for p in &mut t.paragraphs {
+                    for r in &mut p.runs {
+                        r.props.font = None;
+                    }
+                }
+            }
+        }
+    }
+    let pptx = s.execute("file.saveBytes", &json!({"format": "pptx"})).unwrap()["data"].as_str().unwrap().to_string();
+    let mut s = Session::new();
+    s.execute("file.openBytes", &json!({"name": "synthetic.pptx", "data": pptx})).unwrap();
+    s
+}
+
+#[test]
+fn stored_autofit_scale_and_line_reduction_come_through() {
+    let mut s = synthetic_pptx_session();
+    let d = flatten_cmd(&mut s);
+    let bodies = text_bodies(&d);
+    let t = bodies.iter().find(|t| body_text(t) == "Body text").expect("text box");
+    assert_eq!(t["autofit"], "shrink");
+    assert!((t["fontScale"].as_f64().unwrap() - 0.625).abs() < 1e-6, "{t}");
+    assert!((t["lineReduction"].as_f64().unwrap() - 0.2).abs() < 1e-6, "{t}");
+    // And back: fromFlat keeps the carried reduction instead of inventing one.
+    let flat: FlatText = serde_json::from_value(t.clone()).unwrap();
+    assert_eq!(flat.line_reduction, Some(0.2));
+}
+
+#[test]
+fn theme_fonts_resolve_to_real_faces() {
+    let mut s = synthetic_pptx_session();
+    let d = flatten_cmd(&mut s);
+    let bodies = text_bodies(&d);
+    let fonts = |want: &str| -> Vec<String> {
+        let t = bodies.iter().find(|t| body_text(t) == want).unwrap_or_else(|| panic!("no `{want}`"));
+        t["paragraphs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|p| p["runs"].as_array().unwrap().clone())
+            .map(|r| r["font"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(fonts("Heading").iter().all(|f| f == "Georgia"), "{:?}", fonts("Heading"));
+    assert!(fonts("Body text").iter().all(|f| f == "Calibri"), "{:?}", fonts("Body text"));
+    // No run anywhere is left with an empty or unresolved (`+mn-lt`) face.
+    for t in &bodies {
+        for p in t["paragraphs"].as_array().unwrap() {
+            for r in p["runs"].as_array().unwrap() {
+                let f = r["font"].as_str().unwrap_or("");
+                assert!(!f.is_empty() && !f.starts_with('+'), "bad font {f:?} in {t}");
+            }
+        }
+    }
+}
+
+#[test]
+fn embedded_fonts_are_flat_media() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"blank": true})).unwrap();
+    let ttf: Vec<u8> = [0u8, 1, 0, 0].iter().copied().chain((0u8..40).map(|i| i.wrapping_mul(3))).collect();
+    {
+        let doc = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc);
+        let id = deckcraft_model::MediaId(doc.next_id + 1);
+        doc.next_id += 1;
+        doc.media.push(deckcraft_model::MediaItem {
+            id,
+            name: "Synth-bold.ttf".into(),
+            content_type: "font/ttf".into(),
+            data: std::sync::Arc::new(ttf.clone()),
+            link: None,
+        });
+        doc.embedded_fonts.push(deckcraft_model::EmbeddedFont { typeface: "Synth".into(), bold: true, italic: false, media: id });
+    }
+    let d = flatten_cmd(&mut s);
+    assert_eq!(d.fonts.len(), 1);
+    let f = &d.fonts[0];
+    assert_eq!(f.typeface, "Synth");
+    assert_eq!(f.style, FlatFontStyle { bold: true, italic: false });
+    let v = serde_json::to_value(&d).unwrap();
+    assert_eq!(v["fonts"][0]["mediaId"], json!(f.media_id));
+    assert_eq!(v["fonts"][0]["style"], json!({"bold": true, "italic": false}));
+    assert!(d.media.iter().any(|m| m.id == f.media_id && m.content_type == "font/ttf"));
+    let got = s.execute("media.bytes", &json!({"id": f.media_id})).unwrap();
+    assert_eq!(cmd::base64_decode(got["data"].as_str().unwrap()).unwrap(), ttf);
+}
+
+#[test]
+fn explicit_faces_are_kept() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"blank": true})).unwrap();
+    s.execute("slide.new", &json!({"layout": "blank"})).unwrap();
+    s.execute("shape.insert", &json!({"preset": "rect", "rect": [36, 120, 300, 80], "text": "Roboto text"})).unwrap();
+    {
+        let doc = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc);
+        let slide = std::sync::Arc::make_mut(doc.slides.last_mut().unwrap());
+        for sh in &mut slide.shapes {
+            for p in sh.text.iter_mut().flat_map(|t| t.paragraphs.iter_mut()) {
+                for r in &mut p.runs {
+                    r.props.font = Some("Roboto".into());
+                }
+            }
+        }
+    }
+    let pptx = s.execute("file.saveBytes", &json!({"format": "pptx"})).unwrap()["data"].as_str().unwrap().to_string();
+    let mut s = Session::new();
+    s.execute("file.openBytes", &json!({"name": "r.pptx", "data": pptx})).unwrap();
+    let d = flatten_cmd(&mut s);
+    let t = text_bodies(&d).into_iter().find(|t| body_text(t) == "Roboto text").unwrap();
+    for p in t["paragraphs"].as_array().unwrap() {
+        for r in p["runs"].as_array().unwrap() {
+            assert_eq!(r["font"], "Roboto", "{t}");
+        }
+    }
+}
