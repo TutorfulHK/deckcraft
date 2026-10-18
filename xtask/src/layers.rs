@@ -63,6 +63,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("deckcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    // Headless WebAssembly library over the engine (packaging/wasm).
+    ("wasm", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

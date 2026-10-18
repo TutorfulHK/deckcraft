@@ -16,6 +16,19 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveTemplate", "Save as Template…", ["File"], None, "{path}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Save to Data", [], None, "{format?: deckcraft|pptx} → {data: base64}", has_doc, save_bytes_cmd),
         cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format: png|jpeg|pptx|deckcraft|outline|pdf, slide?: index, all?: bool, scale?: px per pt; pdf: layout?: slides|notes|handouts, perPage?: 1|2|3|4|6|9, dpi?, slides?: [index], includeHidden?, textLayer?, frame?}", has_doc, export),
+        cmd!(query "file.flatten", "Flatten", [], None, "{} → flat deck (docs/flat-deck.md); PNGs it references via media.bytes", has_doc, flatten),
+        // Undoable but not journaled: the params carry the whole deck and its media.
+        CommandSpec {
+            id: "file.fromFlat",
+            label: "Open Flat Deck",
+            menu: &[],
+            shortcut: None,
+            params: "{deck: flat deck, media?: {id: base64}} (media also from staged bytes, the last flatten, or the open presentation)",
+            enabled: always,
+            run: from_flat,
+            journal: false,
+            undoable: true,
+        },
         cmd!(query "file.render", "Render Slide", [], None, "{slide?: index, scale?, edit?: bool} → {png: base64, width, height}", has_doc, render),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{}", has_doc, close),
         cmd!(
@@ -211,6 +224,48 @@ pub fn render_png(doc: &Presentation, index: usize, scale: f64, edit: bool) -> (
     let img =
         deckcraft_render::render_slide(doc, index, &deckcraft_render::RenderOpts { scale: scale.clamp(0.01, 16.0), edit, ..Default::default() });
     (img.to_png(), img.width, img.height)
+}
+
+fn flatten(s: &mut Session, _p: &Value) -> Result<Value> {
+    let doc = s.doc()?.doc.clone();
+    let (deck, blobs) = crate::flat::flatten(&doc);
+    s.flat_media = blobs;
+    serde_json::to_value(&deck).map_err(|e| EngineError::Other(format!("flat deck: {e}")))
+}
+
+fn from_flat(s: &mut Session, p: &Value) -> Result<Value> {
+    let deck_v = p.get("deck").ok_or_else(|| bad("file.fromFlat", "missing `deck`"))?;
+    let deck: crate::flat::FlatDeck = serde_json::from_value(deck_v.clone()).map_err(|e| bad("file.fromFlat", format!("deck: {e}")))?;
+    let given = p.get("media").and_then(Value::as_object);
+    let doc = s.active().map(|d| d.doc.clone());
+    let lookup = |id: &str| -> Option<crate::flat::FlatBlob> {
+        let blob = |data: Vec<u8>| crate::flat::FlatBlob { content_type: String::new(), name: String::new(), data: std::sync::Arc::new(data) };
+        if let Some(d) = given.and_then(|m| m.get(id)).and_then(Value::as_str).and_then(base64_decode) {
+            return Some(blob(d));
+        }
+        if let Some(d) = s.staged_media.get(id) {
+            return Some(blob(d.clone()));
+        }
+        if let Some(b) = s.flat_media.get(id) {
+            return Some(b.clone());
+        }
+        let m = doc.as_ref()?.media(deckcraft_model::MediaId(id.parse().ok()?))?;
+        Some(crate::flat::FlatBlob { content_type: m.content_type.clone(), name: m.name.clone(), data: m.data.clone() })
+    };
+    let pres = crate::flat::unflatten(&deck, &lookup)?;
+    s.staged_media.clear();
+    let slides = pres.slides.len();
+    if s.active().is_some() {
+        s.edit(|doc, sel| {
+            *doc = pres;
+            *sel = crate::Selection::default();
+            Ok(())
+        })?;
+    } else {
+        let title = s.next_untitled();
+        s.add_document(DocState::new(pres, None, title));
+    }
+    Ok(json!({"slides": slides}))
 }
 
 fn render(s: &mut Session, p: &Value) -> Result<Value> {

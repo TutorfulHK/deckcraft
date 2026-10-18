@@ -776,11 +776,20 @@ pub struct Presentation {
     pub first_slide_number: u32,
     /// Next free shape/slide/layout/media id.
     pub next_id: u32,
-    /// Embedded fonts (family names; bytes in `media`).
-    pub embedded_fonts: Vec<(String, MediaId)>,
+    /// Embedded fonts, decoded to plain TrueType/OpenType (bytes in `media`).
+    pub embedded_fonts: Vec<EmbeddedFont>,
     /// Unmodelled presentation-level XML kept for round-trip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ext: Option<String>,
+}
+
+/// One embedded face: a family and style whose bytes are a media item.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddedFont {
+    pub typeface: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub media: MediaId,
 }
 
 impl Default for Presentation {

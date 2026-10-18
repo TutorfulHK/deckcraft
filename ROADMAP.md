@@ -43,6 +43,10 @@ format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and av
   channel and the MCP server (headless or connected to the running app).
 - Web: `apps/deckcraft-web` runs the same UI in the browser (trunk; WebGPU with WebGL2 fallback),
   opening the sample deck; Open/Insert use the browser file picker, Save/Export download.
+- Web library: `crates/wasm` (`deckcraft-wasm`, npm `@tutorfulhk/deckcraft-wasm`, tag `wasm-v*`)
+  is a headless WebAssembly build for web apps (run in a Web Worker): open/save PPTX, export PDF,
+  render slide PNGs, and `file.flatten` / `file.fromFlat` to and from the flat deck
+  (`docs/flat-deck.md`), a resolved, absolutely positioned slide model.
 - Release CI: pushes to `release` build a draft GitHub Release (macOS universal dmg, Windows
   x64/x86 msi + zip, Linux AppImage/deb/rpm/tar.gz + Flatpak, FreeBSD tar.gz, web zip); signing
   secrets live in the `release` environment. Version: `cargo xtask version`.

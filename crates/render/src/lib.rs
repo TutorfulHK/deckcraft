@@ -29,10 +29,11 @@ use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as _, Vec2};
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 use vello_cpu::{RenderContext, Resources, peniko};
 
+pub use chart::series_color as chart_series_color;
 pub use images::decode as decode_image;
 pub use morph_text::TextMorph;
 pub use placed::{Placed, PlacedLink, PlacedText, place_slide};
-pub use table::row_heights as table_row_heights;
+pub use table::{CellLook, cell_body as table_cell_body, look as table_cell_look, row_heights as table_row_heights};
 
 /// Largest pixmap side we render (vello_cpu uses u16 sizes).
 pub const MAX_SIDE: u32 = 16_000;
@@ -1111,6 +1112,166 @@ pub fn render_shape(pres: &Presentation, slide: &Slide, id: ShapeId, scale: f64)
         let mut r = r.borrow_mut();
         r.shape(&mut ctx, &f, &rctx, s, view, 0);
         Some(r.finish(ctx, w, h))
+    })
+}
+
+/// Which shape tree of a slide a shape comes from, for resolving its inherited look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    Slide,
+    /// The slide's layout (graphics behind the slide's own shapes).
+    Layout,
+    /// The slide's master.
+    Master,
+}
+
+/// The resolution context of `layer` for `slide`.
+pub fn layer_ctx<'a>(pres: &'a Presentation, slide: &Slide, layer: Layer) -> Option<Ctx<'a>> {
+    match layer {
+        Layer::Slide => Ctx::for_slide(pres, slide),
+        Layer::Layout => {
+            let (m, l) = pres.master_for(slide)?;
+            Some(Ctx::for_layout(pres, m, l?))
+        }
+        Layer::Master => pres.master_for(slide).map(|(m, _)| Ctx::for_master(pres, m)),
+    }
+}
+
+fn safe_scale(scale: f64) -> f64 {
+    if scale.is_finite() { scale.clamp(0.01, 16.0) } else { 1.0 }
+}
+
+/// How far outlines, arrowheads and effects may reach outside a shape's box (left/top/right,
+/// bottom), in points.
+fn shape_reach(rctx: &Ctx, s: &Shape) -> (f64, f64) {
+    let (line, _) = resolve::line(rctx, s);
+    let lw = if line.fill.as_ref().is_some_and(|f| !f.is_none()) { line.width.unwrap_or(0.75).max(0.0) } else { 0.0 };
+    let mut pad = 4.0 + lw * 3.0;
+    let mut below = 0.0;
+    if s.is_group() {
+        pad = pad.max(12.0);
+    }
+    if let (Some(e), _) = resolve::effects(rctx, s) {
+        if let Some(sh) = &e.outer_shadow {
+            pad = pad.max(4.0 + sh.dist.abs() + sh.blur.abs() * 1.5);
+        }
+        if let Some(g) = &e.glow {
+            pad = pad.max(4.0 + g.radius.abs() * 1.5);
+        }
+        if let Some(r) = &e.reflection {
+            below = r.dist.abs() + r.blur.abs();
+        }
+    }
+    let ok = |v: f64| if v.is_finite() { v.clamp(0.0, 2000.0) } else { 0.0 };
+    (ok(pad), ok(below))
+}
+
+/// Render `shape` of slide `index` alone onto a transparent canvas covering its slide-space
+/// bounds plus room for outlines and effects. `layer` says which tree the shape belongs to and
+/// `parent` places it (identity for a top-level shape, the group transform for a group child).
+/// Returns the image and the slide-space rectangle it covers. A panic inside the renderer becomes
+/// `None` (logged).
+pub fn render_shape_on(pres: &Presentation, index: usize, layer: Layer, shape: &Shape, parent: Affine, scale: f64) -> Option<(Image, Rect)> {
+    let slide = pres.slides.get(index)?;
+    let rctx = layer_ctx(pres, slide, layer)?;
+    let x = resolve::xfrm(&rctx, shape);
+    if !x.is_finite() {
+        return None;
+    }
+    let m = parent * x.affine();
+    let pts = [Point::new(0.0, 0.0), Point::new(x.w, 0.0), Point::new(x.w, x.h), Point::new(0.0, x.h)].map(|p| m * p);
+    let mut b = Rect::from_points(pts[0], pts[1]);
+    for p in &pts[2..] {
+        b = b.union_pt(*p);
+    }
+    let (pad, below) = shape_reach(&rctx, shape);
+    let mut r = b.inflate(pad, pad);
+    if below > 0.0 {
+        r.y1 += b.height() + below;
+    }
+    if !(r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()) || r.width() <= 0.0 || r.height() <= 0.0 {
+        return None;
+    }
+    let max = MAX_SIDE as f64;
+    let scale = safe_scale(scale).min(max / r.width()).min(max / r.height());
+    let w = (r.width() * scale).ceil().clamp(1.0, max) as u16;
+    let h = (r.height() * scale).ceil().clamp(1.0, max) as u16;
+    let opts = RenderOpts { scale, ..Default::default() };
+    let view = Affine::scale(scale) * Affine::translate(-r.origin().to_vec2()) * parent;
+    let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RENDERER.with(|rr| {
+            let mut rr = rr.borrow_mut();
+            let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+            let f = Frame { pres, opts: &opts, fields: Renderer::fields(pres, index, &opts) };
+            rr.shape(&mut ctx, &f, &rctx, shape, view, 0);
+            rr.finish(ctx, w, h)
+        })
+    }));
+    match img {
+        Ok(img) => Some((img, r)),
+        Err(_) => {
+            log::error!("rendering a shape of slide {index} panicked");
+            RENDERER.with(|rr| *rr.borrow_mut() = Renderer::default());
+            None
+        }
+    }
+}
+
+/// Render `shape` of slide `index` in its own box: the image covers `w × h` points of the shape's
+/// local space (position, rotation and flips ignored), e.g. a chart's picture or a fill as an
+/// image. Nothing reaching outside the box is drawn.
+pub fn render_shape_box(pres: &Presentation, index: usize, layer: Layer, shape: &Shape, scale: f64) -> Option<Image> {
+    let slide = pres.slides.get(index)?;
+    let rctx = layer_ctx(pres, slide, layer)?;
+    let x = resolve::xfrm(&rctx, shape);
+    if !x.is_finite() || x.w <= 0.0 || x.h <= 0.0 {
+        return None;
+    }
+    let max = MAX_SIDE as f64;
+    let scale = safe_scale(scale).min(max / x.w).min(max / x.h);
+    let w = (x.w * scale).round().clamp(1.0, max) as u16;
+    let h = (x.h * scale).round().clamp(1.0, max) as u16;
+    let mut local = shape.clone();
+    local.xfrm = Some(deckcraft_geom::Xfrm::new(0.0, 0.0, x.w, x.h));
+    let opts = RenderOpts { scale, ..Default::default() };
+    let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RENDERER.with(|rr| {
+            let mut rr = rr.borrow_mut();
+            let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+            let f = Frame { pres, opts: &opts, fields: Renderer::fields(pres, index, &opts) };
+            rr.shape(&mut ctx, &f, &rctx, &local, Affine::scale(scale), 0);
+            rr.finish(ctx, w, h)
+        })
+    }));
+    match img {
+        Ok(img) => Some(img),
+        Err(_) => {
+            log::error!("rendering a shape box of slide {index} panicked");
+            RENDERER.with(|rr| *rr.borrow_mut() = Renderer::default());
+            None
+        }
+    }
+}
+
+/// Render only the background of slide `index` (what shows behind the master graphics).
+pub fn render_background(pres: &Presentation, index: usize, scale: f64) -> Image {
+    let Some(slide) = pres.slides.get(index) else { return Image::default() };
+    let opts = RenderOpts { scale: safe_scale(scale), ..Default::default() };
+    let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RENDERER.with(|rr| {
+            let mut rr = rr.borrow_mut();
+            let (mut ctx, w, h, view) = Renderer::canvas(pres, &opts, false);
+            if let Some(rctx) = Ctx::for_slide(pres, slide) {
+                let f = Frame { pres, opts: &opts, fields: Renderer::fields(pres, index, &opts) };
+                rr.background(&mut ctx, &f, &rctx, Some(slide), view);
+            }
+            rr.finish(ctx, w, h)
+        })
+    }));
+    img.unwrap_or_else(|_| {
+        log::error!("rendering the background of slide {index} panicked");
+        RENDERER.with(|rr| *rr.borrow_mut() = Renderer::default());
+        Image::default()
     })
 }
 

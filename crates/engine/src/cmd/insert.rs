@@ -447,9 +447,9 @@ fn media(s: &mut Session, p: &Value, video: bool) -> Result<Value> {
     let (name, bytes) = media_bytes(p, cmd)?;
     let ct = content_type(&name, &bytes);
     let bytes = std::sync::Arc::new(bytes);
-    let info = deckcraft_media::probe(&bytes);
-    let has_video = info.as_ref().is_ok_and(|i| i.video.is_some());
-    let has_audio = info.as_ref().is_ok_and(|i| i.audio.is_some());
+    let info = super::media::probe(&bytes);
+    let has_video = info.as_ref().is_ok_and(|i| i.has_video);
+    let has_audio = info.as_ref().is_ok_and(|i| i.has_audio);
     match &info {
         Ok(_) if video && !has_video => return Err(bad(cmd, format!("{name} has no video"))),
         Ok(_) if !video && !has_audio && !has_video => return Err(bad(cmd, format!("{name} has no audio"))),
@@ -460,20 +460,14 @@ fn media(s: &mut Session, p: &Value, video: bool) -> Result<Value> {
         _ => {}
     }
     let (duration_ms, width, height, playable) = match &info {
-        Ok(i) => {
-            let (w, h) = i.video.as_ref().map(|v| (v.width, v.height)).unwrap_or((0, 0));
-            (i.duration_ms.min(u32::MAX as u64) as u32, w, h, i.playable())
-        }
+        Ok(i) => (i.duration_ms.min(u32::MAX as u64) as u32, i.width, i.height, i.playable),
         Err(_) => (0, 0, 0, false),
     };
     let warning = (!playable).then(|| match &info {
-        Ok(i) => {
-            let codecs: Vec<&str> = i.audio.iter().map(|a| a.codec.as_str()).chain(i.video.iter().map(|v| v.codec.as_str())).collect();
-            format!("{name} was inserted, but it can't be played ({} isn't supported yet)", codecs.join(" / "))
-        }
+        Ok(i) => format!("{name} was inserted, but it can't be played ({} isn't supported yet)", i.codecs.join(" / ")),
         Err(e) => format!("{name} was inserted, but it can't be played ({e})"),
     });
-    let decodable_video = info.as_ref().is_ok_and(|i| i.video.as_ref().is_some_and(|v| v.decodable));
+    let decodable_video = info.as_ref().is_ok_and(|i| i.decodable_video);
     let poster_png = if video && decodable_video { super::media::poster_png(&bytes, 0) } else { None };
     let size = s.doc()?.doc.slide_size;
     let rect = rect_param(p, "rect").unwrap_or_else(|| {
@@ -501,8 +495,8 @@ fn media(s: &mut Session, p: &Value, video: bool) -> Result<Value> {
     }
     let mut r =
         json!({"id": id, "contentType": ct, "durationMs": duration_ms, "width": width, "height": height, "playable": playable, "warning": warning});
-    if let Ok(i) = &info {
-        r["probe"] = super::media::probe_json(i);
+    if let Ok(i) = info {
+        r["probe"] = i.json;
     }
     Ok(r)
 }

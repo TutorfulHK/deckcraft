@@ -1,0 +1,29 @@
+{
+  "name": "@tutorfulhk/deckcraft-wasm",
+  "version": "0.0.0-template",
+  "description": "DeckCraft as a headless WebAssembly library: open and save PPTX, flatten to and build from a flat slide model, render slide PNGs, export PDF.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TutorfulHK/deckcraft.git",
+    "directory": "crates/wasm"
+  },
+  "type": "module",
+  "main": "deckcraft_wasm.js",
+  "module": "deckcraft_wasm.js",
+  "types": "deckcraft_wasm.d.ts",
+  "files": [
+    "deckcraft_wasm.js",
+    "deckcraft_wasm.d.ts",
+    "deckcraft_wasm_bg.wasm",
+    "deckcraft_wasm_bg.wasm.d.ts",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

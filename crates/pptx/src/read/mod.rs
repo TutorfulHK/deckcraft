@@ -266,6 +266,7 @@ pub fn import(bytes: &[u8]) -> Result<Presentation, PptxError> {
         p.notes_size = Size::new(sane_len(w, 540.0), sane_len(h, 720.0));
     }
     p.first_slide_number = pres_el.u32("firstSlideNum").unwrap_or(1).min(9999);
+    p.embedded_fonts = embedded_fonts(&mut imp, &pres_part, pres_el);
     if let Some(dts) = pres_el.child("defaultTextStyle") {
         p.default_text_style = dml::list_style(&mut imp, &pres_part, dts);
     }
@@ -392,6 +393,34 @@ pub fn import(bytes: &[u8]) -> Result<Presentation, PptxError> {
     p.next_id = imp.next;
     p.fix_next_id();
     Ok(p)
+}
+
+/// `p:embeddedFontLst`: each face decoded to a plain font media item. Faces that cannot be
+/// decoded (MTX-compressed EOT, unknown data) are logged and skipped.
+fn embedded_fonts(imp: &mut Imp, pres: &Part, pres_el: &El) -> Vec<deckcraft_model::EmbeddedFont> {
+    let mut out = vec![];
+    let Some(list) = pres_el.child("embeddedFontLst") else { return out };
+    for ef in list.children_named("embeddedFont").take(64) {
+        let typeface = ef.child("font").and_then(|f| f.attr("typeface")).unwrap_or("").trim().to_string();
+        if typeface.is_empty() {
+            continue;
+        }
+        for (tag, bold, italic) in [("regular", false, false), ("bold", true, false), ("italic", false, true), ("boldItalic", true, true)] {
+            let Some(target) = ef.child(tag).and_then(|e| pres.rels.target(e.attr("r:id").unwrap_or(""))).map(String::from) else { continue };
+            let Some(data) = imp.pkg.get(&target) else { continue };
+            match crate::fonts::decode(&target, data) {
+                Ok((bytes, ty)) => {
+                    let id = MediaId(imp.alloc());
+                    let ext = if ty == "font/otf" { "otf" } else { "ttf" };
+                    let name = format!("{typeface}-{tag}.{ext}");
+                    imp.media.push(MediaItem { id, name, content_type: ty.into(), data: Arc::new(bytes), link: None });
+                    out.push(deckcraft_model::EmbeddedFont { typeface: typeface.clone(), bold, italic, media: id });
+                }
+                Err(e) => log::warn!("embedded font {typeface} ({tag}, {target}) skipped: {e:?}"),
+            }
+        }
+    }
+    out
 }
 
 fn sane_len(v: f64, dflt: f64) -> f64 {
